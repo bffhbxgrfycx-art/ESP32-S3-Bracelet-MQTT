@@ -17,6 +17,7 @@ static lv_obj_t *ui_preview_label = NULL;   /* 底部最新消息预览 */
 
 /* 消息页控件 */
 static lv_obj_t *ui_msg_list = NULL;        /* 消息列表容器 */
+static lv_obj_t *ui_clear_msg_label = NULL; /* 清空消息选项 */
 
 /* 步数页控件 */
 static lv_obj_t *ui_steps_label = NULL;     /* 步数大数字 */
@@ -26,10 +27,46 @@ static lv_obj_t *ui_wifi_label = NULL;      /* WiFi 状态 */
 static lv_obj_t *ui_mqtt_label = NULL;      /* MQTT 状态 */
 static lv_obj_t *ui_bat_label = NULL;       /* 电量详情 */
 static lv_obj_t *ui_ver_label = NULL;       /* 固件版本 */
+static lv_obj_t *ui_rgb_label = NULL;       /* RGB 灯开关状态 */
+
+/* RGB 开关切换回调（由 main.c 注册，设置页 RGB 选项激活时触发） */
+static void (*s_rgb_toggle_cb)(void) = NULL;
 
 /* ================= 页面 ================= */
 static lv_obj_t *page_container[PAGE_COUNT] = {NULL};
 static ui_page_t s_cur_page = PAGE_WATCH;
+
+/* ================= 二级导航状态 ================= */
+static bool s_in_option = false;   /* 是否处于「选项模式」 */
+static int  s_cur_option = 0;      /* 当前聚焦的选项下标 */
+
+/* ================= 每页选项表 =================
+ * 每个页面的可交互选项。设置页目前只有 1 个（RGB 灯开关）。
+ * 其他页面暂不设选项（后续可扩展）。 */
+static const ui_option_t s_settings_options[] = {
+    /* label 用静态指针占位，实际显示由 watch_ui_set_rgb_status 动态更新 ui_rgb_label */
+    { "\xE7\x81\xAF\xE6\x95\x88", NULL },  /* 灯效 —— on_activate 在 option_activate 里动态绑定 */
+};
+
+static const ui_option_t s_msg_options[] = {
+    { "\xE6\xB8\x85\xE7\xA9\xBA\xE6\xB6\x88\xE6\x81\xAF", NULL },  /* 清空消息 */
+};
+
+/* 返回某页的选项表；无选项返回 NULL */
+const ui_option_t *watch_ui_get_options(ui_page_t page, int *count)
+{
+    switch (page) {
+    case PAGE_SETTINGS:
+        if (count) *count = (int)(sizeof(s_settings_options) / sizeof(s_settings_options[0]));
+        return s_settings_options;
+    case PAGE_MSG:
+        if (count) *count = (int)(sizeof(s_msg_options) / sizeof(s_msg_options[0]));
+        return s_msg_options;
+    default:
+        if (count) *count = 0;
+        return NULL;
+    }
+}
 
 /* ================= 消息环形队列 ================= */
 static char msg_buf[MSG_MAX][160];
@@ -37,6 +74,9 @@ static int  msg_count = 0;
 static int  msg_head = 0;   /* 最新一条消息的下标 */
 
 static const char *s_tip = NULL;   /* 当前提示文字（非空时优先显示，覆盖消息预览） */
+
+/* 选项聚焦高亮刷新（前向声明，page_show 里调用） */
+static void option_highlight_refresh(void);
 
 /* ================= 页面切换 ================= */
 static void page_show(ui_page_t page)
@@ -50,25 +90,155 @@ static void page_show(ui_page_t page)
         }
     }
     s_cur_page = page;
+    /* 切换页面时退出选项模式，回到页面层 */
+    s_in_option = false;
+    s_cur_option = 0;
+    option_highlight_refresh();
+}
+
+/* 当前页的选项数量 */
+static int cur_option_count(void)
+{
+    int n = 0;
+    watch_ui_get_options(s_cur_page, &n);
+    return n;
+}
+
+/* 触发当前聚焦选项（选项模式内长按） */
+static void option_activate(void)
+{
+    int n = cur_option_count();
+    const ui_option_t *opts = watch_ui_get_options(s_cur_page, &n);
+    if (opts == NULL || s_cur_option < 0 || s_cur_option >= n) return;
+
+    /* 设置页唯一选项 = RGB 灯，激活时调用注册的回调 */
+    if (s_cur_page == PAGE_SETTINGS && s_cur_option == 0 && s_rgb_toggle_cb != NULL) {
+        s_rgb_toggle_cb();
+        return;
+    }
+
+    /* 消息页唯一选项 = 清空消息 */
+    if (s_cur_page == PAGE_MSG && s_cur_option == 0) {
+        watch_ui_clear_messages();
+        return;
+    }
+
+    if (opts[s_cur_option].on_activate != NULL) {
+        opts[s_cur_option].on_activate();
+    }
 }
 
 void watch_ui_on_key(PressEvent ev)
 {
     lvgl_port_lock(0);
-    switch (ev) {
-    case SINGLE_CLICK:
-        page_show((ui_page_t)((s_cur_page + 1) % PAGE_COUNT));
-        break;
-    case DOUBLE_CLICK:
-        page_show((ui_page_t)((s_cur_page + PAGE_COUNT - 1) % PAGE_COUNT));
-        break;
-    case LONG_PRESS_START:
-        page_show(PAGE_WATCH);
-        break;
-    default:
-        break;
+
+    int n = cur_option_count();
+
+    if (s_in_option) {
+        /* ============ 选项模式 ============ */
+        switch (ev) {
+        case SINGLE_CLICK:
+            /* 下一个选项；若已在最后一个选项 → 退出选项模式并翻下一页 */
+            if (s_cur_option + 1 < n) {
+                s_cur_option++;
+                option_highlight_refresh();
+            } else {
+                page_show((ui_page_t)((s_cur_page + 1) % PAGE_COUNT));  /* 翻页会顺带退出选项模式 */
+            }
+            break;
+        case DOUBLE_CLICK:
+            /* 上一个选项；若已在第一个选项 → 退出选项模式并翻上一页 */
+            if (s_cur_option > 0) {
+                s_cur_option--;
+                option_highlight_refresh();
+            } else {
+                page_show((ui_page_t)((s_cur_page + PAGE_COUNT - 1) % PAGE_COUNT));
+            }
+            break;
+        case LONG_PRESS_START:
+            option_activate();
+            break;
+        default:
+            break;
+        }
+    } else {
+        /* ============ 页面层 ============ */
+        switch (ev) {
+        case SINGLE_CLICK:
+            /* 有选项的页：单击进入选项模式（聚焦第1个选项）；
+             * 无选项的页：单击去下一页 */
+            if (n > 0) {
+                s_in_option = true;
+                s_cur_option = 0;
+                option_highlight_refresh();
+            } else {
+                page_show((ui_page_t)((s_cur_page + 1) % PAGE_COUNT));
+            }
+            break;
+        case DOUBLE_CLICK:
+            page_show((ui_page_t)((s_cur_page + PAGE_COUNT - 1) % PAGE_COUNT));
+            break;
+        case LONG_PRESS_START:
+            page_show(PAGE_WATCH);
+            break;
+        default:
+            break;
+        }
     }
+
     lvgl_port_unlock();
+}
+
+void watch_ui_goto_watch(void)
+{
+    lvgl_port_lock(0);
+    page_show(PAGE_WATCH);
+    lvgl_port_unlock();
+}
+
+/* 注册 RGB 开关切换回调（进入选项模式后，长按 RGB 选项时触发） */
+void watch_ui_set_rgb_toggle_cb(void (*cb)(void))
+{
+    s_rgb_toggle_cb = cb;
+}
+
+/* 更新设置页 RGB 灯状态显示 */
+void watch_ui_set_rgb_status(bool on)
+{
+    if (ui_rgb_label == NULL) return;
+    lvgl_port_lock(0);
+    /* "灯效  开" / "灯效  关" */
+    lv_label_set_text(ui_rgb_label,
+        on ? "\xE7\x81\xAF\xE6\x95\x88  \xE5\xBC\x80"      /* 灯效  开 */
+           : "\xE7\x81\xAF\xE6\x95\x88  \xE5\x85\xB3");     /* 灯效  关 */
+    lvgl_port_unlock();
+}
+
+/* 选项聚焦高亮：当前聚焦选项加背景高亮条，其余去掉。 */
+static void option_highlight_refresh(void)
+{
+    lv_obj_t *target = NULL;
+    bool focused = s_in_option;
+
+    if (s_cur_page == PAGE_SETTINGS) {
+        target = ui_rgb_label;
+        focused = focused && (s_cur_option == 0);
+    } else if (s_cur_page == PAGE_MSG) {
+        target = ui_clear_msg_label;
+        focused = focused && (s_cur_option == 0);
+    } else {
+        return;
+    }
+
+    if (target == NULL) return;
+
+    /* 聚焦：亮蓝紫背景 + 白字；未聚焦：透明背景 + 粉字 */
+    lv_obj_set_style_bg_color(target,
+        focused ? lv_color_hex(0x3A3B5E) : lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(target,
+        focused ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_text_color(target,
+        focused ? lv_color_hex(0xFFFFFF) : lv_color_hex(0xFFB6C1), 0);
 }
 
 /* ================= 消息刷新 ================= */
@@ -134,6 +304,18 @@ static void msg_list_refresh(void)
     }
 }
 
+/* 清空所有历史消息 */
+void watch_ui_clear_messages(void)
+{
+    msg_count = 0;
+    msg_head = 0;
+
+    lvgl_port_lock(0);
+    preview_refresh();
+    msg_list_refresh();
+    lvgl_port_unlock();
+}
+
 /* 显示提示文字（配网等），传 NULL 恢复消息预览 */
 void watch_ui_show_tip(const char *tip)
 {
@@ -151,6 +333,10 @@ void watch_ui_push_message(const char *msg)
     msg_head = (msg_head + 1) % MSG_MAX;
     snprintf(msg_buf[msg_head], sizeof(msg_buf[msg_head]), "%s", msg);
     if (msg_count < MSG_MAX) msg_count++;
+
+    /* 有新消息进来就清掉提示文字，确保预览卡片优先显示消息，
+     * 防止配网提示残留把消息盖掉。 */
+    s_tip = NULL;
 
     lvgl_port_lock(0);
     preview_refresh();
@@ -328,12 +514,21 @@ static void build_page_msg(lv_obj_t *scr)
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 60);
 
     ui_msg_list = lv_obj_create(page);
-    lv_obj_set_size(ui_msg_list, 156, 220);
+    lv_obj_set_size(ui_msg_list, 156, 200);
     lv_obj_align(ui_msg_list, LV_ALIGN_TOP_MID, 0, 88);
     lv_obj_set_style_bg_opa(ui_msg_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(ui_msg_list, 0, 0);
     lv_obj_set_style_pad_all(ui_msg_list, 0, 0);
     lv_obj_clear_flag(ui_msg_list, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 清空消息（可选项：单击进入选项模式，长按清空） */
+    ui_clear_msg_label = lv_label_create(page);
+    lv_label_set_text(ui_clear_msg_label, "\xE6\xB8\x85\xE7\xA9\xBA\xE6\xB6\x88\xE6\x81\xAF");  /* 清空消息 */
+    lv_obj_set_style_text_font(ui_clear_msg_label, &lv_font_wenkai_16, 0);
+    lv_obj_set_style_text_color(ui_clear_msg_label, lv_color_hex(0xFFB6C1), 0);
+    lv_obj_set_style_bg_opa(ui_clear_msg_label, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(ui_clear_msg_label, 6, 0);
+    lv_obj_align(ui_clear_msg_label, LV_ALIGN_BOTTOM_MID, 0, -10);
 
     page_container[PAGE_MSG] = page;
 }
@@ -414,6 +609,22 @@ static void build_page_settings(lv_obj_t *scr)
     lv_obj_set_style_text_font(ui_ver_label, &lv_font_wenkai_16, 0);
     lv_obj_set_style_text_color(ui_ver_label, lv_color_hex(0x8A8A9A), 0);
     lv_obj_align(ui_ver_label, LV_ALIGN_TOP_LEFT, 14, 186);
+
+    /* RGB 灯开关（可选项：单击进入选项模式，长按切换） */
+    ui_rgb_label = lv_label_create(page);
+    lv_label_set_text(ui_rgb_label, "\xE7\x81\xAF\xE6\x95\x88  \xE5\x85\xB3");  /* 灯效  关 */
+    lv_obj_set_style_text_font(ui_rgb_label, &lv_font_wenkai_16, 0);
+    lv_obj_set_style_text_color(ui_rgb_label, lv_color_hex(0xFFB6C1), 0);
+    lv_obj_set_style_bg_opa(ui_rgb_label, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(ui_rgb_label, 6, 0);
+    lv_obj_align(ui_rgb_label, LV_ALIGN_TOP_LEFT, 10, 214);
+
+    /* 提示：单击进选项 / 长按切换 */
+    lv_obj_t *hint = lv_label_create(page);
+    lv_label_set_text(hint, "\xE5\x8D\x95\xE5\x87\xBB\xE8\xBF\x9B\xE9\x80\x89\xE9\xA1\xB9  \xE9\x95\xBF\xE6\x8C\x89\xE5\x88\x87\xE6\x8D\xA2");  /* 单击进选项  长按切换 */
+    lv_obj_set_style_text_font(hint, &lv_font_wenkai_16, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(0x8A8A9A), 0);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 14, 244);
 
     page_container[PAGE_SETTINGS] = page;
 }

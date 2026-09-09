@@ -12,6 +12,7 @@ idf_component_register(
                               "I2C_Driver/I2C_Driver.c"
                               "QMI8658/QMI8658.c"
                               "power_mgmt.c"
+                              "RGB/RGB.c"
 
                          INCLUDE_DIRS
                               "."
@@ -22,6 +23,7 @@ idf_component_register(
                               "./Button_Driver"
                               "./I2C_Driver"
                               "./QMI8658"
+                              "./RGB"
                        )
 
 # 源文件用 UTF-8 编码：Windows 中文系统 GCC 默认按 GBK 读源文件，

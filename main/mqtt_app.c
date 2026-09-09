@@ -20,6 +20,9 @@
 #include "QMI8658.h"
 #include "power_mgmt.h"
 
+/* 由 main.c 提供：收到新消息时 RGB 灯闪烁提醒 */
+extern void rgb_notify(void);
+
 static const char *TAG = "MQTT_APP";
 
 static esp_mqtt_client_handle_t mqtt_client = NULL;
@@ -80,9 +83,11 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
         msg[len] = '\0';
         ESP_LOGI(TAG, "topic=%s msg=%s", event->topic, msg);
 
-        /* 压入历史消息列表（内部已加锁）+ 收到新消息亮屏 */
+        /* 压入历史消息列表（内部已加锁）+ 收到新消息亮屏 + 切回表盘页显示预览 + RGB 灯闪烁提醒 */
         watch_ui_push_message(msg);
+        watch_ui_goto_watch();
         backlight_wake();
+        rgb_notify();
         break;
     }
 
