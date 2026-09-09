@@ -11,6 +11,7 @@ idf_component_register(
                               "Button_Driver/Button_Driver.c"
                               "I2C_Driver/I2C_Driver.c"
                               "QMI8658/QMI8658.c"
+                              "power_mgmt.c"
 
                          INCLUDE_DIRS
                               "."

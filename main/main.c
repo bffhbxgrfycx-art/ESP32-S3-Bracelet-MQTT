@@ -7,6 +7,7 @@
 #include "Button_Driver.h"
 #include "I2C_Driver.h"
 #include "QMI8658.h"
+#include "power_mgmt.h"
 
 /* 按键事件队列：按键回调运行在 esp_timer 回调上下文（高优先级定时器任务），
  * 那里不能做阻塞/加锁/LVGL 操作，否则会死锁或触发看门狗重启。
@@ -62,6 +63,7 @@ void app_main(void)
         /* 消费按键事件（在 LVGL 任务上下文做页面切换，安全） */
         PressEvent ev;
         while (xQueueReceive(s_key_queue, &ev, 0) == pdTRUE) {
+            backlight_wake();          /* 任意按键都点亮屏幕 */
             watch_ui_on_key(ev);
         }
 

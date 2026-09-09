@@ -18,6 +18,7 @@
 #include "BAT_Driver.h"
 #include "provisioning.h"
 #include "QMI8658.h"
+#include "power_mgmt.h"
 
 static const char *TAG = "MQTT_APP";
 
@@ -79,8 +80,9 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
         msg[len] = '\0';
         ESP_LOGI(TAG, "topic=%s msg=%s", event->topic, msg);
 
-        /* 压入历史消息列表（内部已加锁） */
+        /* 压入历史消息列表（内部已加锁）+ 收到新消息亮屏 */
         watch_ui_push_message(msg);
+        backlight_wake();
         break;
     }
 
@@ -211,6 +213,9 @@ static void sensor_refresh_task(void *arg)
         }
 
         (void)acc_mag_prev;
+
+        /* 息屏管理：抬腕检测 + 无操作超时自动息屏（复用上面已读的 Accel） */
+        power_mgmt_poll();
 
         /* 时间（NTP 同步成功后） */
         if (s_time_synced) {
