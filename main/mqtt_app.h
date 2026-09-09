@@ -1,9 +1,9 @@
 #pragma once
 #include "esp_err.h"
 
-/* WiFi 配置 —— 改成你自己的热点 */
-#define WIFI_SSID      "esp32"
-#define WIFI_PASS      "00000000"
+/* WiFi 账号密码不再写死，改为配网（SoftAP + 网页）动态配置，存 NVS。
+ * 首次开机 / 连不上 WiFi 时，手环会开热点 "Bracelet-Setup"，
+ * 手机连上后浏览器打开 http://192.168.4.1 填写即可。 */
 
 /* MQTT 配置 */
 #define MQTT_BROKER_URI  "mqtt://broker.emqx.io"   /* 免费公共 broker */
