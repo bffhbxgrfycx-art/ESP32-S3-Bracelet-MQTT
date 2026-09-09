@@ -48,6 +48,8 @@ static void msg_list_refresh(void)
         lv_label_set_text(label, msg_buf[idx]);
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
         lv_obj_set_width(label, 138);
+        /* 消息文字用霞鹜文楷中文字体，覆盖常用汉字 */
+        lv_obj_set_style_text_font(label, &lv_font_wenkai_16, 0);
         lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
         lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
     }
