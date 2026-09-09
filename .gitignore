@@ -1,0 +1,18 @@
+# ESP-IDF 编译产物
+build/
+sdkconfig.old
+
+# 本地 SDK 配置（每人编译时用 menuconfig 重新生成，或保留各自的）
+sdkconfig
+
+# 组件管理器下载的 LVGL 源码（克隆后 idf.py 会自动下载）
+components/lvgl/
+
+# 依赖锁文件（本地生成）
+dependencies.lock
+
+# 编辑器
+.vscode/
+*.swp
+*.swo
+.DS_Store
